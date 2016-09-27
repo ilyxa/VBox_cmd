@@ -8,7 +8,7 @@
 # 
 # VRDP connection:
 # padsp rdesktop-vrdp -z -p -0 -k en-us -r usb -xm -r sound:local -t snooky:3390
-# SeamlessRDP:
+# SeamlessRDP (windows only):
 # padsp rdesktop -A "%ProgramFiles%\ThinLinc\WTSTools\seamlessrdpshell.exe" -s "notepad" -uosc -posc -z -p -0 -k en-us -xm -r sound:local -t snooky:3990
 # 
 # 
@@ -32,6 +32,8 @@ rdpport="3390"
 #vrdeauth=true
 #vrdessl=true
 _datapool=vms
+
+### TODO
 _pwrtimeout=60
 _vboxmanage=`which VBoxManage`
 _zfs=`which zfs`
@@ -48,6 +50,7 @@ sharedpath="${_storage}/sharedfolder"
 #  -CA ca_cert.pem -CAkey ca_key_private.pem -set_serial 01 -out server_cert.pem
 certpath="${_storage}/certs"
 
+### TODO not correct, always try to do something with openssl...
 _openssl=`which openssl` || vmn=$vmname && vmn="${vmname}`${_openssl} rand -hex 10`"
 vmd="$vmname"
 
@@ -124,6 +127,8 @@ function ZFS() {
                 --audiocontroller ac97 --vrde on --vrdeport ${rdpport} --usb on --usbehci off --usbxhci on --accelerate3d off \
 		--natpf1 "guestrdp,tcp,,3990,,3389" ### SeamlessRDP https://www.cendio.com/seamlessrdp + http://www.kood.org/terminal-server-patch/
                 # --uart1 0x3f8 3 --uartmode1 tcpclient 192.168.171.27:2217 \
+	# Windows XP USB 3.0 hack below
+	# https://forums.virtualbox.org/viewtopic.php?f=28&t=74575
 	echo -n "VM internal setting ." && VBM setextradata ${vmn} \
 		VBoxInternal/Devices/usb-xhci/0/Config/ChipType uPD720201
 	echo -n "VM usb filter setting ." && VBM usbfilter add 0 \
@@ -135,7 +140,7 @@ function ZFS() {
 	echo -n "VM global resolution ." && VBM setextradata global GUI/MaxGuestResolution 1366,768
 	echo -n "VM shared folder ." && VBM sharedfolder add ${vmn} --name sharedforlder --hostpath ${sharedpath} --automount
         [ ! -z ${vrdessl:+x} ] && { 
-		echo "VM RDP5 encryption ." # not work with rdesktop-rdp linux
+		echo "VM RDP5 encryption ." # not work with rdesktop-vrdp linux
 			VBM modifyvm ${vmn} --vrdeproperty "Security/CACertificate=${certpath}/ca_cert.pem"
 			VBM modifyvm ${vmn} --vrdeproperty "Security/ServerCertificate=${certpath}/server_cert.pem"
 			VBM modifyvm ${vmn} --vrdeproperty "Security/ServerPrivateKey=${certpath}/server_key_private.pem"
@@ -151,5 +156,7 @@ function ZFS() {
 }
 
 echo "VM running." && VBoxHeadless  --startvm ${vmn} 2>&1 >/dev/null &
+
+# if you want manual intervention - comment last two strings below (do not forget make manual cleanups!)
 wait
 ctrl_c
