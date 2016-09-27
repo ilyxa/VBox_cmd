@@ -37,7 +37,17 @@ _vboxmanage=`which VBoxManage`
 _zfs=`which zfs`
 _storage="/${_datapool}"
 sharedpath="${_storage}/sharedfolder"
+
+# self-signed certificate generation https://www.virtualbox.org/manual/ch07.html#vrde-crypt :
+# cd $certpath
+# openssl req -new -x509 -days 365 -extensions v3_ca \
+#  -keyout ca_key_private.pem -out ca_cert.pem
+# openssl genrsa -out server_key_private.pem
+# openssl req -new -key server_key_private.pem -out server_req.pem
+# openssl x509 -req -days 365 -in server_req.pem \
+#  -CA ca_cert.pem -CAkey ca_key_private.pem -set_serial 01 -out server_cert.pem
 certpath="${_storage}/certs"
+
 _openssl=`which openssl` || vmn=$vmname && vmn="${vmname}`${_openssl} rand -hex 10`"
 vmd="$vmname"
 
