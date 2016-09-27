@@ -1,0 +1,145 @@
+#!/bin/bash
+# $version: 0.1
+# $name-origin: start_windows.bsh
+# 
+# soft on windows:
+# - SeamlessRDP https://www.cendio.com/seamlessrdp
+# - two or more concurrent sessions in Windows XP PRO http://www.kood.org/terminal-server-patch/
+# 
+# VRDP connection:
+# padsp rdesktop-vrdp -z -p -0 -k en-us -r usb -xm -r sound:local -t snooky:3390
+# SeamlessRDP:
+# padsp rdesktop -A "%ProgramFiles%\ThinLinc\WTSTools\seamlessrdpshell.exe" -s "notepad" -uosc -posc -z -p -0 -k en-us -xm -r sound:local -t snooky:3990
+# 
+# 
+
+#silent=yes	# uncomment for silent mode
+#debug=yes	# uncomment for debug
+
+[ -z ${debug:+x} ] || set -x
+[ -z ${silent:+x} ] || {
+	[ -d ${HOME}/logs ] || mkdir ${HOME}/logs
+	log_file="${HOME}/logs/`basename $0`.txt-`date +'%Y-%m-%d_%H-%M-%S'`"
+	[ -f "$log_file" ] || touch "$log_file"
+	exec 1>> $log_file 2>&1	# silent mode
+	#exec &> >(tee -a "$log_file")
+}
+
+vmname="windows"
+ost="WindowsXP"
+rdpport="3390"
+
+#vrdeauth=true
+#vrdessl=true
+_datapool=vms
+_pwrtimeout=60
+_vboxmanage=`which VBoxManage`
+_zfs=`which zfs`
+_storage="/${_datapool}"
+sharedpath="${_storage}/sharedfolder"
+certpath="${_storage}/certs"
+_openssl=`which openssl` || vmn=$vmname && vmn="${vmname}`${_openssl} rand -hex 10`"
+vmd="$vmname"
+
+
+# some cleanup
+trap ctrl_c INT
+
+# before making snapshots check OSes...
+# zfs allow <login> create,destroy,mount,snapshot,clone storarray/global/vms
+if [ `uname` == "SunOS" ] ; then
+	echo "SunOS detected. Snapshot allowed"
+	_snap=1 # if os == sunos its ok
+# uncomment if u want snapshot. Base VDI MUST be already Allocated!!!!
+#	_makeclone=1 # if you want make snapshot for OS
+fi
+
+function ctrl_c() { 
+        echo -n "** CTRL-C | exit event"
+        echo " (`date +'%Y-%m-%d_%H-%M-%S'`) "
+	pgrep -f "VBoxHeadless --startvm ${vmn}" > /dev/null && echo -n "VM ACPI poweroff ." && VBM controlvm ${vmn} acpipowerbutton
+        echo -n "Waiting for shutdown ."
+        while pgrep -f "VBoxHeadless --startvm ${vmn}" > /dev/null ; do 
+		sleep 1 
+		echo -n "."
+	done 
+	echo ". done"
+	echo -n "VM Unregister  ." && VBM unregistervm ${vmn}
+	echo -n "VM Cleanup ." 
+	if [ ! -z ${_makeclone:+x} ] ; then 
+		echo -n "FS destroy snapshot & clone ."
+		ZFS destroy -R storarray/global/vms/windows@${vmn}
+	fi
+	[ -d ${_storage}/${vmn} ] && rm -rf ${_storage}/${vmn} && echo ". done"
+	echo "$0 done"
+	exit 0
+}
+
+function VBM() {
+	$_vboxmanage $@ 2>&1 > /dev/null && echo -n ". done" || echo -n ". error"
+        echo " (`date +'%Y-%m-%d_%H-%M-%S'`) "
+}
+
+function ZFS() {
+	$_zfs "$@" 2>&1 > /dev/null && echo -n ". done" || echo -n ". error"
+	echo " (`date +'%Y-%m-%d_%H-%M-%S'`) "
+}
+
+
+[ -e ${_storage}/${vmn}/${vmn}/${vmn}.vbox ] || {
+#TODO
+	if [ ! -z ${_makeclone:+x} ] ; then
+		 echo -n "FS zfs create snapshot ."
+		ZFS snapshot storarray/global/vms/windows@${vmn}
+		echo -n "FS zfs create clone ." 
+		ZFS clone storarray/global/vms/windows@${vmn} storarray/global/vms/${vmn}
+	fi
+
+	echo -n "VM creating ." && VBM createvm --name ${vmn} --register --ostype ${ost} --basefolder ${_storage}/${vmn}
+	echo -n "VM BW IO limit ." && VBM bandwidthctl "${vmn}" add iolimit --type disk --limit 25M
+	echo -n "VM BW Net limit ." && VBM bandwidthctl "${vmn}" add netlimit --type network --limit 5m
+	echo -n "VM attaching storage controller ." && VBM storagectl ${vmn} --name sata \
+		--add sata --controller IntelAHCI --portcount 4 --hostiocache off
+	echo -n "VM attaching storage ." 
+	[ -z ${_makeclone:+x} ] && VBM storageattach ${vmn} --storagectl sata \
+		--port 0 --type hdd --medium ${_storage}/${vmname}/${vmd}.vdi --bandwidthgroup iolimit
+	[ -z ${_makeclone:+x} ] || VBM storageattach ${vmn} --storagectl sata \
+		--port 0 --type hdd --medium ${_storage}/${vmn}/${vmd}.vdi --bandwidthgroup iolimit
+	echo -n "VM attaching empty DVD ." && VBM storageattach ${vmn} --storagectl sata --port 1 --type dvddrive --medium emptydrive
+	echo -n "VM settings ." && VBM modifyvm ${vmn} \
+                --acpi on --hwvirtex on --nestedpaging on --cpus 1 --firmware bios \
+                --memory 1024 --vram 128 --ioapic on --nestedpaging on \
+		--audio null --audiocontroller=ac97 --audiocodec stac9700 \
+                --chipset piix3 --boot1 disk --nic1 nat --nictype1 virtio --nicbandwidthgroup1 netlimit --keyboard ps2 --mouse usbtablet \
+                --audiocontroller ac97 --vrde on --vrdeport ${rdpport} --usb on --usbehci off --usbxhci on --accelerate3d off \
+		--natpf1 "guestrdp,tcp,,3990,,3389" ### SeamlessRDP https://www.cendio.com/seamlessrdp + http://www.kood.org/terminal-server-patch/
+                # --uart1 0x3f8 3 --uartmode1 tcpclient 192.168.171.27:2217 \
+	echo -n "VM internal setting ." && VBM setextradata ${vmn} \
+		VBoxInternal/Devices/usb-xhci/0/Config/ChipType uPD720201
+	echo -n "VM usb filter setting ." && VBM usbfilter add 0 \
+		--target ${vmn} --name DSO \
+		--vendorid d4a2 --productid 5661 --remote yes
+        echo -n "VM usb filter setting ." && VBM usbfilter add 1 \
+                --target ${vmn} --name KinstonFlash \
+                --vendorid 13fe --productid 4100 --remote yes
+	echo -n "VM global resolution ." && VBM setextradata global GUI/MaxGuestResolution 1366,768
+	echo -n "VM shared folder ." && VBM sharedfolder add ${vmn} --name sharedforlder --hostpath ${sharedpath} --automount
+        [ ! -z ${vrdessl:+x} ] && { 
+		echo "VM RDP5 encryption ." # not work with rdesktop-rdp linux
+			VBM modifyvm ${vmn} --vrdeproperty "Security/CACertificate=${certpath}/ca_cert.pem"
+			VBM modifyvm ${vmn} --vrdeproperty "Security/ServerCertificate=${certpath}/server_cert.pem"
+			VBM modifyvm ${vmn} --vrdeproperty "Security/ServerPrivateKey=${certpath}/server_key_private.pem"
+			VBM modifyvm ${vmn} --vrdeproperty "Security/Method=negotiate"
+	}
+	[ ! -z ${vrdeauth:+x} ] && {
+		echo "VM Auth ." # username console password console
+			VBM setproperty vrdeauthlibrary "VBoxAuthSimple"
+			VBM modifyvm "${vmn}" --vrdeauthtype external
+			VBM setextradata "${vmn}" "VBoxAuthSimple/users/console" 93d8874c8c86f0fc893dbe15c765ffa0fcd342f798dbf669e08f8cbe095d230c
+	}
+
+}
+
+echo "VM running." && VBoxHeadless  --startvm ${vmn} 2>&1 >/dev/null &
+wait
+ctrl_c
